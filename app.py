@@ -2,11 +2,13 @@ from flask import Flask, render_template, request, jsonify
 import os
 import PyPDF2
 import docx
+import json
 from ai_dm import AIDungeonMaster
 
 app = Flask(__name__)
 ai_dm = AIDungeonMaster()
 UPLOAD_FOLDER = 'uploads'
+MEMORY_FILE = 'memory.json'  # File to store long-term memory
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
@@ -27,7 +29,19 @@ def extract_text_from_file(filepath):
             text = f.read()
     return text
 
-uploaded_knowledge = ""  # Store uploaded knowledge dynamically
+def load_memory():
+    """Load stored memory from a file."""
+    if os.path.exists(MEMORY_FILE):
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_memory(memory):
+    """Save memory data to a file."""
+    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(memory, f, indent=4)
+
+memory_data = load_memory()  # Load stored memory at startup
 
 @app.route('/')
 def home():
@@ -35,19 +49,19 @@ def home():
 
 @app.route('/play', methods=['POST'])
 def play():
-    global uploaded_knowledge
+    global memory_data
     user_input = request.json.get('user_input')
     response = ai_dm.player_action("Player", user_input)
     
-    # If uploaded knowledge exists, AI will use it
-    if uploaded_knowledge:
-        response += f"\n\n(Based on uploaded knowledge: {uploaded_knowledge[:200]}...)"
+    # Store conversation in memory
+    memory_data.setdefault("conversation", []).append({"player": user_input, "ai": response})
+    save_memory(memory_data)
     
     return jsonify({"response": response})
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
-    global uploaded_knowledge
+    global memory_data
     if 'file' not in request.files:
         return jsonify({"error": "No file part"})
     file = request.files['file']
@@ -56,11 +70,17 @@ def upload_file():
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
     file.save(filepath)
     
-    # Extract text from the uploaded file and store it
+    # Extract text from the uploaded file and store it in memory
     extracted_text = extract_text_from_file(filepath)
-    uploaded_knowledge = extracted_text  # Store extracted knowledge for AI use
+    memory_data.setdefault("knowledge", []).append(extracted_text)
+    save_memory(memory_data)
     
     return jsonify({"message": "File uploaded successfully", "filename": file.filename, "extracted_text": extracted_text[:500]})
+
+@app.route('/memory', methods=['GET'])
+def get_memory():
+    """Retrieve stored memory."""
+    return jsonify(memory_data)
 
 if __name__ == '__main__':
     app.run(debug=True)
